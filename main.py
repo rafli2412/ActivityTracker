@@ -10,9 +10,6 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtSql import QSqlDatabase, QSqlQuery
 
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-
 # Folder that holds the .qss files, relative to this script
 STYLE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles")
 
@@ -40,6 +37,7 @@ class ActivityTracker(QWidget):
         self.load_activities()
 
     def setup_database(self):
+        """Create/connect to a SQLite file next to this script and make sure the table exists."""
         db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "activities.db")
 
         self.db = QSqlDatabase.addDatabase("QSQLITE")
@@ -91,9 +89,6 @@ class ActivityTracker(QWidget):
         self.table.setColumnHidden(0, True)  # hide the id column
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
 
-        self.figure = plt.figure()
-        self.canvas = FigureCanvas(self.figure)
-
         # Design Layout
         input_layout = QHBoxLayout()
         input_layout.addWidget(QLabel("Activity:"))
@@ -112,11 +107,7 @@ class ActivityTracker(QWidget):
         left_layout.addLayout(button_layout)
         left_layout.addWidget(self.table)
 
-        self.master_layout = QHBoxLayout()
-        self.master_layout.addLayout(left_layout, 2)
-        self.master_layout.addWidget(self.canvas, 1)
-
-        self.setLayout(self.master_layout)
+        self.setLayout(left_layout)
 
     # ------------------------------------------------------------------
     # Actions
@@ -167,13 +158,12 @@ class ActivityTracker(QWidget):
         self.setStyleSheet(load_stylesheet(sheet))
 
     # ------------------------------------------------------------------
-    # Data / Chart refresh
+    # Data refresh
     # ------------------------------------------------------------------
     def load_activities(self):
         query = QSqlQuery("SELECT id, name, date FROM activities ORDER BY date")
 
         self.table.setRowCount(0)
-        counts = {}
 
         row = 0
         while query.next():
@@ -186,26 +176,7 @@ class ActivityTracker(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(str(name)))
             self.table.setItem(row, 2, QTableWidgetItem(str(date)))
 
-            counts[date] = counts.get(date, 0) + 1
             row += 1
-
-        self.update_chart(counts)
-
-    def update_chart(self, counts):
-        self.figure.clear()
-        ax = self.figure.add_subplot(111)
-
-        if counts:
-            dates = list(counts.keys())
-            values = list(counts.values())
-            ax.bar(dates, values)
-            ax.set_title("Activities per Day")
-            ax.set_ylabel("Count")
-            self.figure.autofmt_xdate(rotation=45)
-        else:
-            ax.set_title("No activities yet")
-
-        self.canvas.draw()
 
 
 if __name__ == "__main__":
