@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QHeaderView, QCheckBox, QDateEdit
 )
 from PyQt5.QtSql import QSqlDatabase, QSqlQuery
+from PyQt5 import QtGui, QtCore
 
 # Folder that holds the .qss files, relative to this script
 STYLE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles")
@@ -24,6 +25,14 @@ def load_stylesheet(filename: str) -> str:
         print(f"Warning: stylesheet '{path}' not found, using no styling.")
         return ""
 
+def set_app_icon(filename: str, length: int, width: int):
+    app_icon = QtGui.QIcon()
+    if length != width:
+        print("Icon must be square!")
+        return
+    
+    app_icon.addFile(filename, QtCore.QSize(length, width))
+    return app_icon
 
 # Main Class
 class ActivityTracker(QWidget):
@@ -184,4 +193,5 @@ if __name__ == "__main__":
     app.setStyleSheet(load_stylesheet("light.css"))
     window = ActivityTracker()
     window.show()
+    app.setWindowIcon(set_app_icon("assets/icon.png", 16, 16))
     sys.exit(app.exec_())
