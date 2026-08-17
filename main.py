@@ -154,7 +154,7 @@ class ActivityTracker(QWidget):
             self.load_activities()
 
     def toggle_dark_mode(self, state):
-        sheet = "dark.qss" if state == Qt.Checked else "light.qss"
+        sheet = "dark.css" if state == Qt.Checked else "light.css"
         self.setStyleSheet(load_stylesheet(sheet))
 
     # ------------------------------------------------------------------
@@ -181,7 +181,7 @@ class ActivityTracker(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyleSheet(load_stylesheet("light.qss"))
+    app.setStyleSheet(load_stylesheet("light.css"))
     window = ActivityTracker()
     window.show()
     sys.exit(app.exec_())
