@@ -1,8 +1,7 @@
-# import
 import sys
 import os
 
-from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QMessageBox, QTableWidget,
@@ -10,6 +9,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtSql import QSqlDatabase, QSqlQuery
 from PyQt5 import QtGui, QtCore
+
+import google_backend as gbackend
 
 # Folder that holds the .qss files, relative to this script
 STYLE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles")
@@ -32,18 +33,105 @@ def set_app_icon(filename: str, length: int, width: int):
         return
     
     app_icon.addFile(filename, QtCore.QSize(length, width))
+    
     return app_icon
 
-# Main Class
-class ActivityTracker(QWidget):
-    def __init__(self):
+# ----------------------------------------------------------------------
+# Background thread so the blocking OAuth call doesn't freeze the UI
+# ----------------------------------------------------------------------
+class GoogleLoginThread(QThread):
+    success = pyqtSignal(object)   # emits the Credentials object
+    failure = pyqtSignal(str)      # emits an error message
+ 
+    def run(self):
+        try:
+            creds = gbackend.login_with_browser()
+            self.success.emit(creds)
+        except Exception as exc:
+            self.failure.emit(str(exc))
+ 
+ 
+# ----------------------------------------------------------------------
+# Login screen shown when there's no valid saved session
+# ----------------------------------------------------------------------
+class LoginWindow(QWidget):
+    def __init__(self, on_success):
         super().__init__()
+        self.on_success = on_success
+        self.login_thread = None
+ 
+        self.setWindowTitle("Sign in - Activity Tracker")
+        self.resize(380, 200)
+ 
+        self.status_label = QLabel(
+            "Sign in with your Google account to save your activities "
+            "to a Google Sheet."
+        )
+        self.status_label.setWordWrap(True)
+ 
+        self.login_btn = QPushButton("Sign in with Google")
+        self.login_btn.clicked.connect(self.start_login)
+ 
+        layout = QVBoxLayout()
+        layout.addStretch()
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.login_btn)
+        layout.addStretch()
+        self.setLayout(layout)
+ 
+    def start_login(self):
+        self.login_btn.setEnabled(False)
+        self.status_label.setText("Opening your browser to sign in with Google...")
+ 
+        self.login_thread = GoogleLoginThread()
+        self.login_thread.success.connect(self.handle_success)
+        self.login_thread.failure.connect(self.handle_failure)
+        self.login_thread.start()
+ 
+    def handle_success(self, creds):
+        self.on_success(creds)
+ 
+    def handle_failure(self, message):
+        self.login_btn.setEnabled(True)
+        self.status_label.setText(
+            "Sign in with your Google account to save your activities "
+            "to a Google Sheet."
+        )
+        QMessageBox.critical(self, "Sign-in Failed", message)
+
+# ----------------------------------------------------------------------
+# Main Class
+# ----------------------------------------------------------------------
+class ActivityTracker(QWidget):
+    def __init__(self, creds, on_logout):
+        super().__init__()
+        self.creds = creds
+        self.on_logout = on_logout
+        self.spreadsheet_id = None
+ 
         self.setWindowTitle("Activity Tracker")
         self.resize(800, 600)
-
-        self.setup_database()
+ 
         self.initUI()
+ 
+        if not self.connect_to_sheet():
+            return
+ 
         self.load_activities()
+
+    # ------------------------------------------------------------------
+    # Google Sheets connection
+    # ------------------------------------------------------------------
+    def connect_to_sheet(self):
+        try:
+            self.spreadsheet_id = gbackend.get_or_create_spreadsheet(self.creds)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Google Sheets Error",
+                f"Could not connect to Google Sheets:\n{exc}"
+            )
+            return False
 
     def setup_database(self):
         """Create/connect to a SQLite file next to this script and make sure the table exists."""
@@ -124,43 +212,63 @@ class ActivityTracker(QWidget):
     def add_activity(self):
         name = self.activity_name.text().strip()
         date = self.date_box.date().toString("yyyy-MM-dd")
-
+ 
         if not name:
             QMessageBox.warning(self, "Missing Info", "Please enter an activity name.")
             return
-
-        query = QSqlQuery()
-        query.prepare("INSERT INTO activities (name, date) VALUES (?, ?)")
-        query.addBindValue(name)
-        query.addBindValue(date)
-        query.exec_()
-
+ 
+        try:
+            gbackend.append_activity(self.creds, self.spreadsheet_id, name, date)
+        except Exception as exc:
+            QMessageBox.critical(self, "Google Sheets Error", f"Could not save activity:\n{exc}")
+            return
+ 
         self.activity_name.clear()
         self.load_activities()
-
+ 
     def delete_activity(self):
         selected = self.table.currentRow()
         if selected < 0:
             QMessageBox.warning(self, "No Selection", "Please select a row to delete.")
             return
-
-        activity_id = self.table.item(selected, 0).text()
-        query = QSqlQuery()
-        query.prepare("DELETE FROM activities WHERE id = ?")
-        query.addBindValue(activity_id)
-        query.exec_()
-
+ 
+        # Row order in the table matches the sheet's row order, and the
+        # sheet's data starts at row 2 (row 1 is the header).
+        sheet_row_number = selected + 2
+ 
+        try:
+            gbackend.delete_activity_row(self.creds, self.spreadsheet_id, sheet_row_number)
+        except Exception as exc:
+            QMessageBox.critical(self, "Google Sheets Error", f"Could not delete activity:\n{exc}")
+            return
+ 
         self.load_activities()
-
+ 
     def clear_activities(self):
         confirm = QMessageBox.question(
             self, "Confirm Clear", "Delete ALL activities?",
             QMessageBox.Yes | QMessageBox.No
         )
+        if confirm != QMessageBox.Yes:
+            return
+ 
+        try:
+            gbackend.clear_all_activities(self.creds, self.spreadsheet_id)
+        except Exception as exc:
+            QMessageBox.critical(self, "Google Sheets Error", f"Could not clear activities:\n{exc}")
+            return
+ 
+        self.load_activities()
+
+    def handle_logout(self):
+        confirm = QMessageBox.question(
+            self, "Sign Out", "Sign out of Google? You'll need to sign in again next time.",
+            QMessageBox.Yes | QMessageBox.No
+        )
         if confirm == QMessageBox.Yes:
-            query = QSqlQuery()
-            query.exec_("DELETE FROM activities")
-            self.load_activities()
+            gbackend.logout()
+            self.close()
+            self.on_logout()
 
     def toggle_dark_mode(self, state):
         sheet = "dark.css" if state == Qt.Checked else "light.css"
@@ -170,28 +278,55 @@ class ActivityTracker(QWidget):
     # Data refresh
     # ------------------------------------------------------------------
     def load_activities(self):
-        query = QSqlQuery("SELECT id, name, date FROM activities ORDER BY date")
-
+        try:
+            rows = gbackend.read_activities(self.creds, self.spreadsheet_id)
+        except Exception as exc:
+            QMessageBox.critical(self, "Google Sheets Error", f"Could not load activities:\n{exc}")
+            return
+ 
         self.table.setRowCount(0)
+ 
+        for row_index, row in enumerate(rows):
+            self.table.insertRow(row_index)
+            for col_index in range(3):
+                value = row[col_index] if col_index < len(row) else ""
+                self.table.setItem(row_index, col_index, QTableWidgetItem(str(value)))
 
-        row = 0
-        while query.next():
-            self.table.insertRow(row)
-            id_ = query.value(0)
-            name = query.value(1)
-            date = query.value(2)
 
-            self.table.setItem(row, 0, QTableWidgetItem(str(id_)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(name)))
-            self.table.setItem(row, 2, QTableWidgetItem(str(date)))
-
-            row += 1
+# ----------------------------------------------------------------------
+# App startup: decide whether to show the login screen or go straight in
+# ----------------------------------------------------------------------
+class AppController:
+    def __init__(self):
+        self.login_window = None
+        self.main_window = None
+ 
+    def start(self):
+        creds = gbackend.load_saved_credentials()
+        if creds:
+            self.show_main(creds)
+        else:
+            self.show_login()
+ 
+    def show_login(self):
+        self.login_window = LoginWindow(on_success=self.show_main)
+        self.login_window.show()
+ 
+    def show_main(self, creds):
+        if self.login_window:
+            self.login_window.close()
+            self.login_window = None
+ 
+        self.main_window = ActivityTracker(creds, on_logout=self.show_login)
+        self.main_window.show()
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyleSheet(load_stylesheet("light.css"))
-    window = ActivityTracker()
-    window.show()
     app.setWindowIcon(set_app_icon("assets/icon.png", 16, 16))
+    
+    controller = AppController()
+    controller.start()
+ 
     sys.exit(app.exec_())
